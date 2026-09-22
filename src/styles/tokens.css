@@ -1,0 +1,43 @@
+:root {
+  --bg: #000000;
+  --bg-elev: #0b0b0b;
+  --bg-chip: #141414;
+  --ink: #ffffff;
+  --muted: #8d8d8d;
+  --muted-2: #5c5c5c;
+  --pink: #ff3dae;
+  --pink-soft: #ff8fd4;
+  --pink-word: #ff4eb8;
+  --purple: #6b21ef;
+  --purple-deep: #3a1248;
+  --login: #4a1458;
+  --orange: #ff6a00;
+  --yellow: #ffe14d;
+  --green: #2ee56d;
+  --green-deep: #168a3c;
+  --card: #111111;
+  --stroke: rgba(255, 255, 255, 0.08);
+  --glow-pink: rgba(255, 80, 180, 0.55);
+  --glow-purple: rgba(130, 70, 255, 0.4);
+  --gold: #d4af37;
+  --gold-soft: #e8d5a3;
+  --gold-deep: #b8922a;
+  --glow-gold: rgba(212, 175, 55, 0.58);
+  --glow-bronze: rgba(168, 124, 48, 0.42);
+  --font-display: 'Outfit', 'Plus Jakarta Sans', sans-serif;
+  --font-body: 'Plus Jakarta Sans', 'Outfit', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius-xl: 36px;
+  --radius-lg: 28px;
+  --radius-md: 20px;
+  --radius-sm: 14px;
+  --nav-h: 88px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --max: 430px;
+}
+
+@media (min-width: 900px) {
+  :root {
+    --max: 720px;
+  }
+}
