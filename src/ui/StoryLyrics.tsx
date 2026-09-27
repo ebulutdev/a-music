@@ -14,7 +14,7 @@ export function StoryLyrics({
   frame,
   track,
   liveLabel,
-  emptyLabel,
+  emptyLabel: _emptyLabel,
   tone = 'dark',
 }: StoryLyricsProps) {
   const current = frame.current || frame.prev || frame.next || '\u00a0';

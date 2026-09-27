@@ -118,7 +118,7 @@ function MinimalOrbit({ levels, active }: { levels: number[]; active: boolean })
 }
 
 // Minimal Pulse
-function MinimalPulse({ levels, active }: { levels: number[]; active: boolean }) {
+function MinimalPulse({ levels, active: _active }: { levels: number[]; active: boolean }) {
   const bass = (levels[0] + levels[1] + levels[2] + levels[3]) / 4;
   const rings = [0.32, 0.55, 0.78];
   return (
@@ -131,7 +131,7 @@ function MinimalPulse({ levels, active }: { levels: number[]; active: boolean })
         </radialGradient>
       </defs>
       <circle cx="120" cy="120" r={18 + bass * 20} fill="url(#pulse-clean-grad)" />
-      {rings.map((factor, i) => (
+      {rings.map((_factor, i) => (
         <circle
           key={i}
           cx="120"

@@ -12,6 +12,7 @@
     "test:perf": "vitest run --reporter=verbose agents"
   },
   "dependencies": {
+    "firebase": "^12.19.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

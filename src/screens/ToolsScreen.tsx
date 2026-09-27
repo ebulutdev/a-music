@@ -40,6 +40,8 @@ import {
   type Song,
 } from '@agents';
 import { FIREBASE_COLLECTIONS } from '@db/firebase-collections';
+import { isFirebaseConfigured, firebaseConfig, syncLocalDatabaseToFirestore, db } from '../lib/firebase';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { useI18n } from '../i18n/I18nProvider';
 import { LangSwitch } from '../ui/LangSwitch';
 import type { View } from '../lib/nav';
@@ -52,7 +54,45 @@ export function ToolsScreen({
   onNavigate?: (view: View) => void;
 }) {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<'intelligence' | 'kie' | 'security' | 'humanizer'>('intelligence');
+  const [activeTab, setActiveTab] = useState<'firebase' | 'intelligence' | 'kie' | 'security' | 'humanizer'>('firebase');
+
+  // Firebase state
+  const [isSyncingFirebase, setIsSyncingFirebase] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ success: boolean; written: number; collections: string[]; error?: string } | null>(null);
+  const [pingLatency, setPingLatency] = useState<number | null>(null);
+  const [pingStatus, setPingStatus] = useState<string | null>(null);
+
+  const handleSyncFirebase = async () => {
+    setIsSyncingFirebase(true);
+    setSyncResult(null);
+    try {
+      const res = await syncLocalDatabaseToFirestore();
+      setSyncResult(res);
+    } catch (e: unknown) {
+      setSyncResult({ success: false, written: 0, collections: [], error: String(e) });
+    } finally {
+      setIsSyncingFirebase(false);
+    }
+  };
+
+  const handlePingFirebase = async () => {
+    if (!db) {
+      setPingStatus('❌ Firestore henüz başlatılmadı.');
+      return;
+    }
+    setPingStatus('Bağlantı test ediliyor...');
+    const start = performance.now();
+    try {
+      const testRef = doc(db, '_connectivity_check', 'ping');
+      await setDoc(testRef, { ping: true, timestamp: serverTimestamp() });
+      await getDoc(testRef);
+      const latency = Math.round(performance.now() - start);
+      setPingLatency(latency);
+      setPingStatus(`✅ Başarılı! Yanıt süresi: ${latency}ms`);
+    } catch (e: unknown) {
+      setPingStatus(`❌ Hata: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   // ==========================================================================
   // TAB 1: INTELLIGENCE & PERSONALIZATION STATE
@@ -725,6 +765,12 @@ export function ToolsScreen({
       {/* Tab Navigation */}
       <nav className="studio-tabs" aria-label="Studio Modules">
         <button
+          className={`studio-tab-btn ${activeTab === 'firebase' ? 'is-active' : ''}`}
+          onClick={() => setActiveTab('firebase')}
+        >
+          🔥 Firebase Bulut
+        </button>
+        <button
           className={`studio-tab-btn ${activeTab === 'intelligence' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('intelligence')}
         >
@@ -751,6 +797,168 @@ export function ToolsScreen({
       </nav>
 
       <div className="studio-module-content">
+        {/* ================================================================== */}
+        {/* TAB 0: FIREBASE CLOUD & SYNC                                       */}
+        {/* ================================================================== */}
+        {activeTab === 'firebase' && (
+          <div className="studio-panel-grid">
+            {/* Left: Project Configuration & Live Status */}
+            <div className="studio-panel-card">
+              <h2 className="studio-panel-title">🔥 Firebase Canlı Bulut Bağlantısı</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <span
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '50%',
+                    background: isFirebaseConfigured() ? '#22c55e' : '#ef4444',
+                    boxShadow: isFirebaseConfigured() ? '0 0 10px #22c55e' : 'none',
+                    display: 'inline-block',
+                  }}
+                />
+                <strong style={{ fontSize: '15px', color: '#fff' }}>
+                  {isFirebaseConfigured() ? 'Canlı Bağlantı Aktif' : 'Bağlantı Bekleniyor'}
+                </strong>
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: 'monospace',
+                    padding: '2px 8px',
+                    borderRadius: '99px',
+                    background: 'rgba(34, 197, 94, 0.12)',
+                    color: '#22c55e',
+                    border: '1px solid rgba(34, 197, 94, 0.3)',
+                    marginLeft: 'auto',
+                  }}
+                >
+                  ONLINE
+                </span>
+              </div>
+
+              <div style={{ display: 'grid', gap: '10px', background: 'rgba(0,0,0,0.3)', padding: '14px', borderRadius: '14px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Proje ID:</span>
+                  <strong style={{ color: '#38bdf8', fontFamily: 'monospace' }}>{firebaseConfig.projectId}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Auth Domain:</span>
+                  <span style={{ color: '#e2e8f0', fontFamily: 'monospace', fontSize: '12px' }}>{firebaseConfig.authDomain}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Storage Bucket:</span>
+                  <span style={{ color: '#e2e8f0', fontFamily: 'monospace', fontSize: '12px' }}>{firebaseConfig.storageBucket}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ color: '#94a3b8' }}>Measurement ID:</span>
+                  <span style={{ color: '#facc15', fontFamily: 'monospace', fontSize: '12px' }}>{firebaseConfig.measurementId}</span>
+                </div>
+              </div>
+
+              <div style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
+                <button
+                  type="button"
+                  className="studio-btn studio-btn--primary"
+                  style={{
+                    flex: 1,
+                    padding: '12px 16px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                    color: '#000',
+                    fontWeight: '700',
+                    fontSize: '13.5px',
+                    cursor: 'pointer',
+                    border: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                  }}
+                  onClick={handlePingFirebase}
+                >
+                  ⚡ Firestore Bağlantı Testi (Ping)
+                </button>
+              </div>
+
+              {pingStatus && (
+                <div style={{ marginTop: '12px', padding: '10px 14px', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', fontSize: '13px', color: '#e2e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>{pingStatus}</span>
+                  {pingLatency !== null && (
+                    <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '6px', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', fontWeight: 600 }}>
+                      {pingLatency} ms
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Right: Cloud Sync Console & Collections Overview */}
+            <div className="studio-panel-card">
+              <h2 className="studio-panel-title">🔄 Firestore Veritabanı Eşitleme</h2>
+              <p style={{ fontSize: '13px', color: '#94a3b8', lineHeight: '1.5', margin: '0 0 16px' }}>
+                Yerel çalışma alanınızdaki 16 Firestore koleksiyonunun (şarkılar, kullanıcı profilleri, sesler, vokal modelleri) tüm verilerini tek tıkla canlı Firestore'a aktarın.
+              </p>
+
+              <button
+                type="button"
+                className="studio-btn"
+                style={{
+                  width: '100%',
+                  padding: '14px',
+                  borderRadius: '14px',
+                  background: 'linear-gradient(135deg, #38bdf8 0%, #6366f1 100%)',
+                  color: '#fff',
+                  fontWeight: '700',
+                  fontSize: '14px',
+                  cursor: isSyncingFirebase ? 'wait' : 'pointer',
+                  border: 'none',
+                  boxShadow: '0 8px 24px rgba(56, 189, 248, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                }}
+                disabled={isSyncingFirebase}
+                onClick={handleSyncFirebase}
+              >
+                {isSyncingFirebase ? '⏳ Firestore Senkronize Ediliyor...' : '🚀 Tüm Yerel Verileri Firestore\'a Aktar (Sync)'}
+              </button>
+
+              {syncResult && (
+                <div
+                  style={{
+                    marginTop: '16px',
+                    padding: '14px',
+                    borderRadius: '12px',
+                    background: syncResult.success ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                    border: `1px solid ${syncResult.success ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                  }}
+                >
+                  <strong style={{ color: syncResult.success ? '#22c55e' : '#ef4444', display: 'block', marginBottom: '6px' }}>
+                    {syncResult.success ? '🎉 Senkronizasyon Başarılı!' : '❌ Hata Oluştu'}
+                  </strong>
+                  {syncResult.success ? (
+                    <div style={{ fontSize: '12.5px', color: '#cbd5e1' }}>
+                      Toplam <strong>{syncResult.written}</strong> adet döküman, <strong>{syncResult.collections.length}</strong> koleksiyona başarıyla yazıldı.
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '12px', color: '#f87171' }}>{syncResult.error}</div>
+                  )}
+                </div>
+              )}
+
+              <h3 style={{ fontSize: '14px', color: '#e2e8f0', margin: '20px 0 10px' }}>📁 Tanımlı Firestore Koleksiyonları (16 Adet)</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', maxHeight: '180px', overflowY: 'auto' }}>
+                {Object.values(FIREBASE_COLLECTIONS).map((c) => (
+                  <div key={c.name} style={{ background: 'rgba(255,255,255,0.04)', padding: '6px 10px', borderRadius: '8px', fontSize: '12px' }}>
+                    <span style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 'bold' }}>{c.name}</span>
+                    <span style={{ color: '#64748b', fontSize: '10.5px', display: 'block' }}>{c.fields.length} alan</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ================================================================== */}
         {/* TAB 1: MUSIC INTELLIGENCE & PERSONALIZATION                         */}
         {/* ================================================================== */}
