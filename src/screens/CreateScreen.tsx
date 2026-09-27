@@ -1,13 +1,6 @@
-import { type CSSProperties } from 'react';
-import { IconNote } from '../ui/Icons';
 import { Header } from '../ui/Header';
 import { HomeGenreRail } from '../ui/HomeGenreRail';
 import { useI18n } from '../i18n/I18nProvider';
-
-const WAVE = Array.from({ length: 52 }, (_, i) => {
-  const n = 0.42 + Math.sin(i * 0.48) * 0.32 + Math.sin(i * 1.21) * 0.18;
-  return Math.min(0.98, Math.max(0.2, n));
-});
 
 export function CreateScreen({
   onMic,
@@ -37,21 +30,24 @@ export function CreateScreen({
 
         <div className="code-stage">
           <article className="code-card" aria-label={t('create.codeAria')}>
-            <div className="code-wave" aria-hidden>
-              <span className="code-note">
-                <IconNote size={14} />
-              </span>
-              {WAVE.map((h, i) => (
-                <i key={i} style={{ '--i': i, '--h': h } as CSSProperties} />
-              ))}
+            <div className="code-card-header" aria-hidden>
+              <div className="code-terminal-dots">
+                <span className="dot dot--red" />
+                <span className="dot dot--yellow" />
+                <span className="dot dot--green" />
+              </div>
+              <div className="code-header-badge">
+                <span className="code-chip">AI SYNTHESIS</span>
+                <span className="code-engine">irishrap.core</span>
+              </div>
+              <span className="code-status-pill">● READY</span>
             </div>
             <pre className="code-block">
-              <span className="tok-kw">await</span> <span className="tok-fn">vibe.music.compose</span>
-              {'({\n  '}
-              <span className="tok-key">prompt</span>
-              {': '}
-              <span className="tok-str">'{t('create.codeSample')}'</span>
-              {',\n});'}
+              <span className="tok-comment">// ⚡ Prompt'tan stüdyo miksine:</span>{'\n'}
+              <span className="tok-kw">const</span> <span className="tok-var">track</span> = <span className="tok-kw">await</span> <span className="tok-fn">irishrap.compose</span>({'{'}{'\n'}
+              {'  '}<span className="tok-key">vibe</span>: <span className="tok-str">'gece sürüşü • lofi & 808'</span>,{'\n'}
+              {'  '}<span className="tok-key">pipeline</span>: [<span className="tok-val">'beat'</span>, <span className="tok-val">'autotune-vocal'</span>]{'\n'}
+              {'}'});
               <span className="code-caret" aria-hidden />
             </pre>
           </article>

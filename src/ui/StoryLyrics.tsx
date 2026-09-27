@@ -32,9 +32,7 @@ export function StoryLyrics({
             </p>
             {next ? <p className="story-lyric is-next">{next}</p> : null}
           </>
-        ) : (
-          <p className="story-lyric is-now">{emptyLabel}</p>
-        )}
+        ) : null}
       </div>
     </div>
   );
