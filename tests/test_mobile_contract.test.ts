@@ -27,7 +27,7 @@ describe('Mobile Contract & Error Sanitization Tests', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.success).toBe(true);
-    expect(res.data.song_id).toBe('song_456');
+    expect(res.data?.song_id).toBe('song_456');
   });
 
   it('sanitizes errors and hides Bearer tokens, internal paths, and internal IPs', () => {

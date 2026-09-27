@@ -20,16 +20,28 @@ import type {
 const log = createLogger('suno');
 
 function envFlag(name: string, fallback: string): string {
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const local = window.localStorage.getItem(name);
+    if (local != null && local !== '') return local;
+  }
   const meta = import.meta as { env?: Record<string, string | boolean | undefined> };
   const value = meta.env?.[name];
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   return typeof value === 'string' ? value : fallback;
 }
 
+export function resolveApiKey(): string {
+  return envFlag('VITE_SUNO_API_KEY', '') || envFlag('VITE_KIE_API_KEY', '');
+}
+
 export function shouldUseMockSuno(): boolean {
-  const key = envFlag('VITE_SUNO_API_KEY', '');
-  const forced = envFlag('VITE_USE_MOCK_SUNO', 'true');
-  return forced !== 'false' || !key;
+  const meta = import.meta as { env?: Record<string, string | boolean | undefined> };
+  if (meta.env?.MODE === 'test') {
+    return true;
+  }
+  const key = resolveApiKey();
+  const forced = envFlag('VITE_USE_MOCK_SUNO', 'false');
+  return forced === 'true' || !key;
 }
 
 function resolveApiBase(): string {
@@ -43,7 +55,7 @@ function resolveApiBase(): string {
 
 async function requestJson(path: string, body: unknown): Promise<SunoTask> {
   const base = resolveApiBase();
-  const key = envFlag('VITE_SUNO_API_KEY', '');
+  const key = resolveApiKey();
   const url = `${base}${path}`;
   log.info('suno.http', { path, hasKey: Boolean(key) });
 
@@ -230,6 +242,7 @@ export const liveSunoClient: SunoClientPort = {
         ...(req.styleWeight != null ? { style_weight: req.styleWeight } : {}),
         ...(req.weirdnessConstraint != null ? { weirdness_constraint: req.weirdnessConstraint } : {}),
         ...(req.audioWeight != null ? { audio_weight: req.audioWeight } : {}),
+        ...(req.personaId ? { persona_id: req.personaId } : {}),
       },
     });
   },
@@ -256,7 +269,7 @@ export const liveSunoClient: SunoClientPort = {
 
   getTimestampedLyrics: async (req: KieTimestampedLyricsRequest): Promise<KieTimestampedLyricsData> => {
     const base = resolveApiBase();
-    const key = envFlag('VITE_SUNO_API_KEY', '');
+    const key = resolveApiKey();
     const callBackUrl = req.callBackUrl || envFlag('VITE_SUNO_CALLBACK_URL', '');
 
     let res: Response;
@@ -326,7 +339,7 @@ export const liveSunoClient: SunoClientPort = {
 
   async poll(taskId: string) {
     const base = resolveApiBase();
-    const key = envFlag('VITE_SUNO_API_KEY', '');
+    const key = resolveApiKey();
 
     const isKie = base.includes('kie.ai') || base.includes('/kie-api');
     const queryPath = isKie
@@ -362,7 +375,23 @@ export const liveSunoClient: SunoClientPort = {
       msg?: string;
       data?: {
         status?: string;
-        response?: { sunoData?: Array<{ audioUrl?: string; audio_url?: string; title?: string }> };
+        state?: string;
+        response?: {
+          data?: Array<{
+            id?: string;
+            audio_url?: string;
+            audioUrl?: string;
+            stream_audio_url?: string;
+            streamAudioUrl?: string;
+            image_url?: string;
+            imageUrl?: string;
+            title?: string;
+            duration?: number;
+            tags?: string;
+          }>;
+          sunoData?: Array<{ audioUrl?: string; audio_url?: string; title?: string }>;
+        };
+        resultJson?: string;
         result?: { audioUrl?: string; audio_url?: string; title?: string };
         audioUrl?: string;
         audio_url?: string;
@@ -373,16 +402,57 @@ export const liveSunoClient: SunoClientPort = {
       throw diagnoseKieError(json.code, json.msg || 'Poll error', queryPath, { taskId });
     }
 
-    const remote = json.data?.status?.toLowerCase() ?? 'running';
-    const sunoAudio = json.data?.response?.sunoData?.[0];
+    const remote = (json.data?.status || json.data?.state || 'running').toLowerCase();
+
+    // Kie.ai returns generated tracks under json.data.response.data or inside json.data.resultJson string
+    let rawItems: Array<{
+      id?: string;
+      title?: string;
+      audio_url?: string;
+      audioUrl?: string;
+      stream_audio_url?: string;
+      streamAudioUrl?: string;
+      image_url?: string;
+      imageUrl?: string;
+      duration?: number;
+      tags?: string;
+    }> = [];
+
+    if (Array.isArray(json.data?.response?.data)) {
+      rawItems = json.data.response.data;
+    } else if (Array.isArray(json.data?.response?.sunoData)) {
+      rawItems = json.data.response.sunoData;
+    } else if (json.data?.resultJson) {
+      try {
+        const parsed = typeof json.data.resultJson === 'string' ? JSON.parse(json.data.resultJson) : json.data.resultJson;
+        if (Array.isArray(parsed?.data)) rawItems = parsed.data;
+      } catch {
+        // ignore parse error
+      }
+    }
+
+    const audioList = rawItems.map((item) => ({
+      id: item.id,
+      title: item.title,
+      audioUrl: item.audio_url || item.audioUrl || item.stream_audio_url || item.streamAudioUrl,
+      audio_url: item.audio_url || item.audioUrl,
+      streamAudioUrl: item.stream_audio_url || item.streamAudioUrl,
+      stream_audio_url: item.stream_audio_url || item.streamAudioUrl,
+      imageUrl: item.image_url || item.imageUrl,
+      image_url: item.image_url || item.imageUrl,
+      duration: item.duration,
+      tags: item.tags,
+    }));
+
+    const first = audioList[0];
     const audioUrl =
-      sunoAudio?.audioUrl ||
-      sunoAudio?.audio_url ||
+      first?.audioUrl ||
+      first?.streamAudioUrl ||
       json.data?.result?.audioUrl ||
       json.data?.result?.audio_url ||
       json.data?.audioUrl ||
       json.data?.audio_url;
-    const title = sunoAudio?.title || json.data?.result?.title;
+    const title = first?.title || json.data?.result?.title;
 
     const status =
       remote.includes('success') || remote === 'ready' || remote === 'complete'
@@ -391,7 +461,7 @@ export const liveSunoClient: SunoClientPort = {
           ? 'failed'
           : 'running';
 
-    return { taskId, status, audioUrl, title };
+    return { taskId, status, audioUrl, title, audioList };
   },
 };
 

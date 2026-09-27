@@ -17,11 +17,26 @@ const log = createLogger('suno-mock');
 const tasks = new Map<string, SunoTask>();
 
 function seed(kind: string, title: string): SunoTask {
+  const silentWav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
   const task: SunoTask = {
     taskId: createId('suno'),
     status: 'ready',
     title,
-    audioUrl: `mock://audio/${kind}/${title.replace(/\s+/g, '-').toLowerCase()}`,
+    audioUrl: silentWav,
+    audioList: [
+      {
+        id: createId('trk'),
+        title: `${title} (Varyasyon 1)`,
+        audioUrl: silentWav,
+        duration: 120,
+      },
+      {
+        id: createId('trk'),
+        title: `${title} (Varyasyon 2)`,
+        audioUrl: silentWav,
+        duration: 125,
+      },
+    ],
   };
   tasks.set(task.taskId, task);
   log.info('mock.task', { kind, taskId: task.taskId, title });

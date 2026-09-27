@@ -18,15 +18,28 @@ import {
   updateUserTasteFromFeedback,
   validateAudioUpload,
   validateKieGenerateRequest,
+  validateKieMashupRequest,
+  validateWeightRange,
+  getSunoClient,
+  listSavedVocals,
+  readAllLocal,
+  upsertLocal,
+  createId,
+  type SunoTask,
   type CandidateTrack,
   type CompiledMusicPrompt,
   type FeedbackTag,
   type KieCoverModel,
+  type KieMusicModel,
+  type KieSeparationType,
   type ParsedMusicIntent,
   type UserTasteVector,
   type VocalHumanizerPreset,
   type VocalProfileAnalysis,
+  type VocalMode,
+  type Song,
 } from '@agents';
+import { FIREBASE_COLLECTIONS } from '@db/firebase-collections';
 import { useI18n } from '../i18n/I18nProvider';
 import { LangSwitch } from '../ui/LangSwitch';
 import type { View } from '../lib/nav';
@@ -95,8 +108,143 @@ export function ToolsScreen({
   };
 
   // ==========================================================================
-  // TAB 2: KIE.AI ENGINE & PARAMETERS STATE
+  // TAB 2: KIE.AI MULTI-MODE STUDIO STATE
   // ==========================================================================
+  type KieStudioMode = 'add_instrumental' | 'mashup' | 'generate' | 'cover' | 'separate_vocals';
+  const [studioMode, setStudioMode] = useState<KieStudioMode>('add_instrumental');
+
+  // ==========================================================================
+  // Vocal Style Profiles
+  // These are STYLE/ARRANGEMENT profiles only. They are intentionally not
+  // hard-coded to third-party artist recordings or cloned voices.
+  // ==========================================================================
+  type VocalProfileSource = 'style' | 'saved_vocal' | 'custom_url' | 'licensed_persona';
+
+  interface TurkishRapVocalProfile {
+    id: string;
+    name: string;
+    badge: string;
+    description: string;
+    sourceType: VocalProfileSource;
+    idealBeatTags: string;
+    style: string;
+    audioWeight: number;
+    styleWeight: number;
+    weirdness: number;
+    gender: 'm' | 'f';
+    title: string;
+    prompt: string;
+    personaId?: string;
+  }
+
+  const TURKISH_RAP_ARTIST_PRESETS: TurkishRapVocalProfile[] = useMemo(() => [
+    {
+      id: 'style_melodic_trap_baritone',
+      name: 'Motive-inspired',
+      badge: 'Melodik Trap Bariton',
+      description: 'Motive referanslı; özgün ses, akıcı teknik flow, lirik bariton ve melodik autotune karakteri.',
+      sourceType: 'style',
+      idealBeatTags: 'Turkish melodic trap, 130 BPM, minor key emotional piano, sliding 808 sub bass, tight punchy kick, wide stereo, midrange vocal pocket',
+      style: 'Turkish melodic trap, 130 BPM, emotional piano, deep 808 bass, smooth autotune baritone vocal character, technical rap cadence',
+      audioWeight: 0.72,
+      styleWeight: 0.82,
+      weirdness: 0.15,
+      gender: 'm',
+      title: 'Melodik Trap Bariton',
+      prompt: 'Özgün bir erkek vokal; karanlık melodik trap, akıcı teknik flow, bariton renk, kontrollü autotune, nefesli geçişler ve net heceleme.',
+    },
+    {
+      id: 'style_hype_club_trap',
+      name: 'Lvbel C5-inspired',
+      badge: 'Hype Club Trap & Hard Autotune',
+      description: 'Lvbel C5 referanslı; özgün ses, yüksek enerji, sert autotune, club groove ve kısa adlib karakteri.',
+      sourceType: 'style',
+      idealBeatTags: 'Turkish hype trap, 142 BPM, aggressive punchy kicks, bouncy sliding 808, crisp claps, club trap rhythm, energetic adlibs',
+      style: 'Turkish hype trap, 142 BPM, hard autotune, bouncy sliding 808, high-energy club delivery, short rhythmic adlibs',
+      audioWeight: 0.70,
+      styleWeight: 0.86,
+      weirdness: 0.18,
+      gender: 'm',
+      title: 'Hype Club Trap',
+      prompt: 'Özgün bir erkek vokal; yüksek enerjili club trap, sert autotune, kısa ritmik adlibler, vurucu heceleme ve zıplayan groove.',
+    },
+    {
+      id: 'style_street_drill',
+      name: 'UZI-inspired',
+      badge: 'Sokak Drill & Pain Trap',
+      description: 'UZI referanslı; özgün ses, gritty delivery, koyu drill atmosferi ve sliding 808 karakteri.',
+      sourceType: 'style',
+      idealBeatTags: 'Turkish street drill, 140 BPM, gritty raw delivery, sliding sub 808, dark atmospheric bells, hard drill snare, melancholic undertones',
+      style: 'Turkish street drill, 140 BPM, gritty raw delivery, dark sliding 808, restrained autotune, melancholic pain-trap atmosphere',
+      audioWeight: 0.72,
+      styleWeight: 0.84,
+      weirdness: 0.15,
+      gender: 'm',
+      title: 'Sokak Drill',
+      prompt: 'Özgün bir erkek vokal; karanlık sokak drill, çatallı ve ham ton, kontrollü autotune, düşük register ve duygusal gerilim.',
+    },
+    {
+      id: 'style_modern_istanbul_drill',
+      name: 'Çakal-inspired',
+      badge: 'Modern Istanbul Drill',
+      description: 'Çakal referanslı; özgün ses, esnek ritmik heceleme, bounce hi-hat ve modern şehir drill groove.',
+      sourceType: 'style',
+      idealBeatTags: 'Turkish modern drill, 140 BPM, bouncy hi-hat rolls, syncopated sliding 808, playful street cadence, whisper-to-hype adlibs',
+      style: 'Turkish modern drill, 140 BPM, playful street cadence, bouncy hi-hat rolls, syncopated 808, dynamic adlibs',
+      audioWeight: 0.70,
+      styleWeight: 0.84,
+      weirdness: 0.20,
+      gender: 'm',
+      title: 'Modern Istanbul Drill',
+      prompt: 'Özgün bir erkek vokal; modern şehir drill, esnek heceleme, konuşur gibi flow, bounce hi-hat hissi ve kontrollü hype adlibler.',
+    },
+  ], []);
+
+  // Saved vocals from the database
+  const savedVocals = useMemo(() => listSavedVocals(), []);
+  const [selectedVocalId, setSelectedVocalId] = useState<string>('custom');
+  const [selectedStyleProfileId, setSelectedStyleProfileId] = useState<string>('style_melodic_trap_baritone');
+  const [vocalAudioUrl, setVocalAudioUrl] = useState<string>('');
+
+  const applyStyleProfile = (id: string) => {
+    setSelectedStyleProfileId(id);
+    const profile = TURKISH_RAP_ARTIST_PRESETS.find((p) => p.id === id);
+    if (!profile) return;
+    setBeatTags(profile.idealBeatTags);
+    setKieStyle(profile.style);
+    setKieAudioWeight(profile.audioWeight);
+    setKieStyleWeight(profile.styleWeight);
+    setKieWeirdness(profile.weirdness);
+    setKieVocalGender(profile.gender);
+    setBeatTitle(profile.title);
+    setKieTitle(profile.title);
+    setKiePrompt(profile.prompt);
+  };
+
+  const handleVocalSelect = (id: string) => {
+    setSelectedVocalId(id);
+    if (id === 'custom') return;
+    const found = savedVocals.find((v) => v.clip.id === id);
+    if (found) setVocalAudioUrl(found.clip.publicUrl || found.clip.storagePath);
+  };
+
+  // Add Instrumental Beat Inputs
+  const [beatTitle, setBeatTitle] = useState('Night City Beat');
+  const [beatTags, setBeatTags] = useState(
+    'Dark Trap, 142 BPM, sliding 808 sub, hard punchy kick, wide stereo, carved vocal pocket in mid frequencies',
+  );
+
+  // Mashup Inputs
+  const [mashupTrack1, setMashupTrack1] = useState(
+    () => savedVocals[0]?.clip.publicUrl || 'https://audiostream.kie.ai/stream/sample-vocal.mp3',
+  );
+  const [mashupTrack2, setMashupTrack2] = useState('https://audiostream.kie.ai/stream/sample-beat.mp3');
+  const [mashupVocalMode, setMashupVocalMode] = useState<VocalMode>('auto_lyrics');
+
+  // Separation Inputs
+  const [separationType, setSeparationType] = useState<KieSeparationType>('separate_vocal');
+
+  // General & Shared Parameters
   const [kieModel, setKieModel] = useState<KieCoverModel>('V6_WILD');
   const [kieCustomMode, setKieCustomMode] = useState(true);
   const [kieInstrumental, setKieInstrumental] = useState(false);
@@ -104,37 +252,77 @@ export function ToolsScreen({
   const [kiePrompt, setKiePrompt] = useState('Walking through midnight rain, neon lights flickering in the haze [breath]');
   const [kieStyle, setKieStyle] = useState('Alternative rock, Atmospheric indie, 110 BPM, F# minor');
   const [kieNegativeTags, setKieNegativeTags] = useState('screaming, harsh noise, distorted');
-  const [kieAudioWeight, setKieAudioWeight] = useState(0.86);
-  const [kieStyleWeight, setKieStyleWeight] = useState(0.68);
-  const [kieWeirdness, setKieWeirdness] = useState(0.25);
+  const [kieAudioWeight, setKieAudioWeight] = useState(0.85);
+  const [kieStyleWeight, setKieStyleWeight] = useState(0.70);
+  const [kieWeirdness, setKieWeirdness] = useState(0.20);
   const [kieVocalGender, setKieVocalGender] = useState<'m' | 'f' | 'any'>('f');
-  const [kieCallbackUrl, setKieCallbackUrl] = useState('https://api.myapp.com/webhooks/kie-callback');
+  const [kieCallbackUrl, setKieCallbackUrl] = useState('');
+
+  // Generated tracks history
+  const [generatedHistory, setGeneratedHistory] = useState<Song[]>(() => {
+    return readAllLocal<Song>(FIREBASE_COLLECTIONS.songs.name).filter((s) => Boolean(s.audioUrl));
+  });
 
   // Pre-flight validation output
   const kieValidation = useMemo(() => {
     try {
-      validateKieGenerateRequest(
-        {
-          model: kieModel,
-          customMode: kieCustomMode,
-          instrumental: kieInstrumental,
-          title: kieTitle,
-          prompt: kiePrompt,
-          style: kieStyle,
-          negativeTags: kieNegativeTags,
-          audioWeight: kieAudioWeight,
-          styleWeight: kieStyleWeight,
-          weirdnessConstraint: kieWeirdness,
-          vocalGender: kieVocalGender === 'any' ? undefined : kieVocalGender,
-          callBackUrl: kieCallbackUrl,
-        },
-        true,
-      );
+      if (studioMode === 'add_instrumental') {
+        if (!vocalAudioUrl.trim()) throw new Error("Kendi / yetkili vokal kaynağın ('upload_url') zorunludur.");
+        if (!beatTitle.trim()) throw new Error("Beat başlığı ('title') zorunludur.");
+        if (!beatTags.trim()) throw new Error("Beat tarzı ve etiketleri ('tags') zorunludur.");
+        validateWeightRange('audio_weight', kieAudioWeight);
+        validateWeightRange('style_weight', kieStyleWeight);
+        validateWeightRange('weirdness_constraint', kieWeirdness);
+        return { valid: true, error: null };
+      }
+      if (studioMode === 'mashup') {
+        validateKieMashupRequest([mashupTrack1, mashupTrack2], true);
+        validateWeightRange('audio_weight', kieAudioWeight);
+        validateWeightRange('style_weight', kieStyleWeight);
+        validateWeightRange('weirdness_constraint', kieWeirdness);
+        return { valid: true, error: null };
+      }
+      if (studioMode === 'generate') {
+        validateKieGenerateRequest(
+          {
+            model: kieModel,
+            customMode: kieCustomMode,
+            instrumental: kieInstrumental,
+            title: kieTitle,
+            prompt: kiePrompt,
+            style: kieStyle,
+            negativeTags: kieNegativeTags,
+            audioWeight: kieAudioWeight,
+            styleWeight: kieStyleWeight,
+            weirdnessConstraint: kieWeirdness,
+            vocalGender: kieVocalGender === 'any' ? undefined : kieVocalGender,
+            callBackUrl: kieCallbackUrl,
+          },
+          true,
+        );
+        return { valid: true, error: null };
+      }
+      if (studioMode === 'cover') {
+        if (!vocalAudioUrl.trim()) throw new Error("Cover için kendi / yetkili kaynak sesin ('upload_url') zorunludur.");
+        validateWeightRange('audio_weight', kieAudioWeight);
+        validateWeightRange('style_weight', kieStyleWeight);
+        return { valid: true, error: null };
+      }
+      if (studioMode === 'separate_vocals') {
+        if (!vocalAudioUrl.trim()) throw new Error("Ayrıştırılacak kendi / yetkili ses ('audio_url') zorunludur.");
+        return { valid: true, error: null };
+      }
       return { valid: true, error: null };
     } catch (err: unknown) {
       return { valid: false, error: err instanceof Error ? err.message : String(err) };
     }
   }, [
+    studioMode,
+    vocalAudioUrl,
+    beatTitle,
+    beatTags,
+    mashupTrack1,
+    mashupTrack2,
     kieModel,
     kieCustomMode,
     kieInstrumental,
@@ -149,11 +337,75 @@ export function ToolsScreen({
     kieCallbackUrl,
   ]);
 
-  // Outgoing JSON preview
+  // Outgoing JSON preview matching the selected mode
   const outgoingKiePayload = useMemo(() => {
+    const selectedProfile = TURKISH_RAP_ARTIST_PRESETS.find((p) => p.id === selectedStyleProfileId);
+    if (studioMode === 'add_instrumental') {
+      return {
+        model: 'ai-music-api/add-instrumental',
+        callBackUrl: kieCallbackUrl || undefined,
+        input: {
+          upload_url: vocalAudioUrl,
+          title: beatTitle.slice(0, 100),
+          tags: beatTags.slice(0, 1000),
+          negative_tags: kieNegativeTags,
+          model: kieModel,
+          ...(kieVocalGender !== 'any' ? { vocal_gender: kieVocalGender } : {}),
+          style_weight: Number(kieStyleWeight.toFixed(2)),
+          audio_weight: Number(kieAudioWeight.toFixed(2)),
+          weirdness_constraint: Number(kieWeirdness.toFixed(2)),
+          ...(selectedProfile?.personaId ? { persona_id: selectedProfile.personaId } : {}),
+        },
+      };
+    }
+    if (studioMode === 'mashup') {
+      return {
+        model: 'ai-music-api/mashup',
+        callBackUrl: kieCallbackUrl || undefined,
+        input: {
+          upload_url_list: [mashupTrack1, mashupTrack2],
+          vocal_mode: mashupVocalMode,
+          title: kieTitle.slice(0, 100),
+          prompt: kiePrompt.slice(0, 5000),
+          style: kieStyle.slice(0, 1000),
+          model: kieModel,
+          style_weight: Number(kieStyleWeight.toFixed(2)),
+          audio_weight: Number(kieAudioWeight.toFixed(2)),
+          weirdness_constraint: Number(kieWeirdness.toFixed(2)),
+        },
+      };
+    }
+    if (studioMode === 'cover') {
+      return {
+        model: 'ai-music-api/upload-and-cover-audio',
+        callBackUrl: kieCallbackUrl || undefined,
+        input: {
+          upload_url: vocalAudioUrl,
+          custom_mode: kieCustomMode,
+          title: kieTitle.slice(0, 100),
+          style: kieStyle.slice(0, 1000),
+          prompt: kiePrompt.slice(0, 5000),
+          model: kieModel,
+          ...(kieVocalGender !== 'any' ? { vocal_gender: kieVocalGender } : {}),
+          style_weight: Number(kieStyleWeight.toFixed(2)),
+          audio_weight: Number(kieAudioWeight.toFixed(2)),
+          ...(selectedProfile?.personaId ? { persona_id: selectedProfile.personaId } : {}),
+        },
+      };
+    }
+    if (studioMode === 'separate_vocals') {
+      return {
+        model: 'ai-music-api/separate-vocals',
+        callBackUrl: kieCallbackUrl || undefined,
+        input: {
+          audio_url: vocalAudioUrl,
+          type: separationType,
+        },
+      };
+    }
     return {
       model: 'ai-music-api/generate',
-      callBackUrl: kieCallbackUrl,
+      callBackUrl: kieCallbackUrl || undefined,
       input: {
         model: kieModel,
         custom_mode: kieCustomMode,
@@ -166,9 +418,18 @@ export function ToolsScreen({
         style_weight: Number(kieStyleWeight.toFixed(2)),
         audio_weight: Number(kieAudioWeight.toFixed(2)),
         weirdness_constraint: Number(kieWeirdness.toFixed(2)),
+        ...(selectedProfile?.personaId ? { persona_id: selectedProfile.personaId } : {}),
       },
     };
   }, [
+    studioMode,
+    vocalAudioUrl,
+    beatTitle,
+    beatTags,
+    mashupTrack1,
+    mashupTrack2,
+    mashupVocalMode,
+    separationType,
     kieModel,
     kieCustomMode,
     kieInstrumental,
@@ -181,7 +442,179 @@ export function ToolsScreen({
     kieAudioWeight,
     kieWeirdness,
     kieCallbackUrl,
+    selectedStyleProfileId,
+    TURKISH_RAP_ARTIST_PRESETS,
   ]);
+
+  // ==========================================================================
+  // TAB 2: KIE.AI EXECUTION & LIVE STATUS STATE
+  // ==========================================================================
+  // SECURITY: API keys must never be shipped in the React bundle or localStorage.
+  // getSunoClient() should read KIE credentials from the server/runtime environment.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [sendTask, setSendTask] = useState<SunoTask | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [pollStatus, setPollStatus] = useState<string | null>(null);
+
+  const handleSendToKie = async () => {
+    if (!kieValidation.valid) return;
+    setIsSubmitting(true);
+    setSendError(null);
+    setSendTask(null);
+    setPollStatus('İstek Kie.ai sunucusuna gönderiliyor...');
+
+    try {
+      const client = getSunoClient();
+      const selectedProfile = TURKISH_RAP_ARTIST_PRESETS.find((p) => p.id === selectedStyleProfileId);
+      let task: SunoTask;
+
+      if (studioMode === 'add_instrumental') {
+        task = await client.addInstrumental({
+          uploadUrl: vocalAudioUrl,
+          title: beatTitle.slice(0, 100),
+          tags: beatTags.slice(0, 1000),
+          negativeTags: kieNegativeTags || undefined,
+          model: kieModel as KieMusicModel,
+          vocalGender: kieVocalGender === 'any' ? undefined : kieVocalGender,
+          styleWeight: kieStyleWeight,
+          audioWeight: kieAudioWeight,
+          weirdnessConstraint: kieWeirdness,
+          personaId: selectedProfile?.personaId,
+          callBackUrl: kieCallbackUrl || undefined,
+        });
+      } else if (studioMode === 'mashup') {
+        task = await client.mashup({
+          uploadUrlList: [mashupTrack1, mashupTrack2],
+          vocalMode: mashupVocalMode,
+          title: kieTitle.slice(0, 100),
+          prompt: kiePrompt.slice(0, 5000),
+          style: kieStyle.slice(0, 1000),
+          model: kieModel,
+          styleWeight: kieStyleWeight,
+          audioWeight: kieAudioWeight,
+          weirdnessConstraint: kieWeirdness,
+          callBackUrl: kieCallbackUrl || undefined,
+        });
+      } else if (studioMode === 'cover') {
+        task = await client.cover({
+          uploadUrl: vocalAudioUrl,
+          customMode: kieCustomMode,
+          instrumental: kieInstrumental,
+          title: kieTitle.slice(0, 100),
+          style: kieStyle.slice(0, 1000),
+          prompt: kiePrompt.slice(0, 5000),
+          model: kieModel,
+          vocalGender: kieVocalGender === 'any' ? undefined : kieVocalGender,
+          styleWeight: kieStyleWeight,
+          audioWeight: kieAudioWeight,
+          personaId: selectedProfile?.personaId,
+          callBackUrl: kieCallbackUrl || undefined,
+        });
+      } else if (studioMode === 'separate_vocals') {
+        task = await client.separateVocals({
+          audioUrl: vocalAudioUrl,
+          type: separationType,
+          callBackUrl: kieCallbackUrl || undefined,
+        });
+      } else {
+        task = await client.generate({
+          model: kieModel,
+          customMode: kieCustomMode,
+          instrumental: kieInstrumental,
+          title: kieTitle.slice(0, kieModel === 'V4' ? 80 : 100),
+          prompt: kiePrompt.slice(0, kieCustomMode ? (kieModel === 'V4' ? 3000 : 5000) : 500),
+          style: kieStyle.slice(0, kieModel === 'V4' ? 200 : 1000),
+          negativeTags: kieNegativeTags || undefined,
+          vocalGender: kieVocalGender === 'any' ? undefined : kieVocalGender,
+          styleWeight: kieStyleWeight,
+          audioWeight: kieAudioWeight,
+          weirdnessConstraint: kieWeirdness,
+          personaId: selectedProfile?.personaId,
+          callBackUrl: kieCallbackUrl || undefined,
+        });
+      }
+
+      setSendTask(task);
+
+      // Helper to persist generated song into library
+      const saveTaskToDatabase = (readyTask: SunoTask) => {
+        const tracks =
+          readyTask.audioList && readyTask.audioList.length > 0
+            ? readyTask.audioList
+            : readyTask.audioUrl
+              ? [{ title: readyTask.title, audioUrl: readyTask.audioUrl }]
+              : [];
+
+        for (const t of tracks) {
+          if (!t.audioUrl) continue;
+          const sId = createId('song');
+          upsertLocal(FIREBASE_COLLECTIONS.songs.name, {
+            id: sId,
+            userId,
+            generationId: readyTask.taskId,
+            title: t.title || (studioMode === 'add_instrumental' ? beatTitle : kieTitle),
+            artist: 'Kie.ai Studio',
+            coverTone: studioMode === 'add_instrumental' ? 'beat' : 'vocal',
+            audioUrl: t.audioUrl,
+            durationMs: (t.duration || 120) * 1000,
+            kind: studioMode === 'add_instrumental' ? 'beat' : 'create',
+            styleText: studioMode === 'add_instrumental' ? beatTags : kieStyle,
+            createdAt: Date.now(),
+          });
+          upsertLocal(FIREBASE_COLLECTIONS.library_items.name, {
+            id: createId('lib'),
+            userId,
+            songId: sId,
+            pinned: false,
+            addedAt: Date.now(),
+          });
+        }
+        setGeneratedHistory(readAllLocal<Song>(FIREBASE_COLLECTIONS.songs.name).filter((s) => Boolean(s.audioUrl)));
+      };
+
+      if (task.status === 'ready') {
+        saveTaskToDatabase(task);
+        setPollStatus('🎉 Müzik başarıyla üretildi ve Kitaplığa eklendi!');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (task.status === 'failed') {
+        setSendError('Kie.ai isteği başarısız olarak işaretledi.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      setPollStatus(`Kie.ai işleme aldı (Task ID: ${task.taskId}). Şarkı sentezleniyor...`);
+      let current = task;
+      let attempts = 0;
+      const maxAttempts = 35;
+
+      while (attempts < maxAttempts && (current.status === 'queued' || current.status === 'running')) {
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+        attempts++;
+        try {
+          current = await client.poll(task.taskId);
+          setSendTask(current);
+          setPollStatus(`Ses sentezleniyor... Durum: ${current.status} (${attempts * 4}s)`);
+        } catch (pollErr) {
+          console.warn('Polling retry:', pollErr);
+        }
+      }
+
+      if (current.status === 'ready') {
+        saveTaskToDatabase(current);
+        setPollStatus('🎉 Müzik başarıyla hazırlandı ve Kitaplığa eklendi!');
+      } else if (current.status === 'failed') {
+        setSendError('Kie.ai ses üretimini tamamlayamadı.');
+      }
+    } catch (err: unknown) {
+      setSendError(err instanceof Error ? err.message : String(err));
+      setPollStatus(null);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   // ==========================================================================
   // TAB 3: SECURITY, WEBHOOK & DIAGNOSTICS STATE
@@ -467,163 +900,573 @@ export function ToolsScreen({
         )}
 
         {/* ================================================================== */}
-        {/* TAB 2: KIE.AI PARAMETERS & PRE-FLIGHT VALIDATOR                     */}
+        {/* TAB 2: KIE.AI PARAMETERS & MULTI-MODE STUDIO                       */}
         {/* ================================================================== */}
         {activeTab === 'kie' && (
-          <div className="studio-panel-grid">
-            {/* Left: Parameter Inputs */}
-            <div className="studio-panel-card">
-              <h2 className="studio-panel-title">🎛️ Kie.ai İstek Parametreleri (Girdi)</h2>
-
-              <div className="studio-form-group">
-                <label>Kie Suno Modeli:</label>
-                <select className="studio-select" value={kieModel} onChange={(e) => setKieModel(e.target.value as KieCoverModel)}>
-                  <option value="V6_WILD">V6_WILD (En İnsansı, Doğal Ses, Vokal Kilidi)</option>
-                  <option value="V6">V6 (Suno V6 Stabil)</option>
-                  <option value="V6_MINI">V6_MINI (Hızlı Nesil)</option>
-                  <option value="V5_5">V5_5 (Gelişmiş Ritim)</option>
-                  <option value="V5">V5 (Klasik)</option>
-                  <option value="V4_5PLUS">V4_5PLUS</option>
-                  <option value="V4">V4 (Eski Versiyon - 80 Karakter Başlık Limiti)</option>
-                </select>
-              </div>
-
-              <div className="studio-checkbox-row">
-                <label>
-                  <input type="checkbox" checked={kieCustomMode} onChange={(e) => setKieCustomMode(e.target.checked)} />
-                  <strong>Custom Mode</strong> (Özel Başlık, Stil &amp; Söz)
-                </label>
-                <label>
-                  <input type="checkbox" checked={kieInstrumental} onChange={(e) => setKieInstrumental(e.target.checked)} />
-                  <strong>Instrumental</strong> (Vokalsiz Enstrümantal Beat)
-                </label>
-              </div>
-
-              <div className="studio-form-group">
-                <label>
-                  Başlık (Title): <span className="counter">({kieTitle.length}/{kieModel === 'V4' ? 80 : 100})</span>
-                </label>
-                <input className="studio-input" value={kieTitle} onChange={(e) => setKieTitle(e.target.value)} />
-              </div>
-
-              <div className="studio-form-group">
-                <label>
-                  Şarkı Sözü / Prompt: <span className="counter">({kiePrompt.length}/{kieModel === 'V4' ? 3000 : 5000})</span>
-                </label>
-                <textarea className="studio-textarea" rows={2} value={kiePrompt} onChange={(e) => setKiePrompt(e.target.value)} />
-              </div>
-
-              <div className="studio-form-group">
-                <label>
-                  Stil (Style): <span className="counter">({kieStyle.length}/{kieModel === 'V4' ? 200 : 1000})</span>
-                </label>
-                <input className="studio-input" value={kieStyle} onChange={(e) => setKieStyle(e.target.value)} />
-              </div>
-
-              <div className="studio-form-group">
-                <label>Negatif Etiketler (Negative Tags):</label>
-                <input
-                  className="studio-input"
-                  value={kieNegativeTags}
-                  onChange={(e) => setKieNegativeTags(e.target.value)}
-                  placeholder="screaming, harsh noise, distorted..."
-                />
-              </div>
-
-              <div className="studio-form-group">
-                <label>Vokal Cinsiyeti (Vocal Gender):</label>
-                <select
-                  className="studio-select"
-                  value={kieVocalGender}
-                  onChange={(e) => setKieVocalGender(e.target.value as 'm' | 'f' | 'any')}
-                >
-                  <option value="any">Herhangi Biri / Fark Etmez</option>
-                  <option value="f">Kadın (Female)</option>
-                  <option value="m">Erkek (Male)</option>
-                </select>
-              </div>
-
-              {/* Weight Sliders */}
-              <div className="studio-slider-group">
-                <div className="slider-header">
-                  <span>Audio Weight (Melodi &amp; Vokal Sadakati):</span>
-                  <strong>{kieAudioWeight.toFixed(2)}</strong>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={kieAudioWeight}
-                  onChange={(e) => setKieAudioWeight(parseFloat(e.target.value))}
-                />
-              </div>
-
-              <div className="studio-slider-group">
-                <div className="slider-header">
-                  <span>Style Weight (Müzik Tarzı Baskınlığı):</span>
-                  <strong>{kieStyleWeight.toFixed(2)}</strong>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={kieStyleWeight}
-                  onChange={(e) => setKieStyleWeight(parseFloat(e.target.value))}
-                />
-              </div>
-
-              <div className="studio-slider-group">
-                <div className="slider-header">
-                  <span>Weirdness Constraint (Yaratıcı Sapma Sınırı):</span>
-                  <strong>{kieWeirdness.toFixed(2)}</strong>
-                </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={kieWeirdness}
-                  onChange={(e) => setKieWeirdness(parseFloat(e.target.value))}
-                />
-              </div>
-
-              <div className="studio-form-group">
-                <label>Callback Webhook URL:</label>
-                <input className="studio-input" value={kieCallbackUrl} onChange={(e) => setKieCallbackUrl(e.target.value)} />
-              </div>
+          <div>
+            {/* Top: Operation Mode Selector */}
+            <div className="studio-mode-tabs">
+              <button
+                type="button"
+                className={`studio-mode-tab-btn ${studioMode === 'add_instrumental' ? 'is-active' : ''}`}
+                onClick={() => setStudioMode('add_instrumental')}
+              >
+                🥁 Vokale Beat Ekle (Instrumental)
+              </button>
+              <button
+                type="button"
+                className={`studio-mode-tab-btn ${studioMode === 'mashup' ? 'is-active' : ''}`}
+                onClick={() => setStudioMode('mashup')}
+              >
+                🎛️ Vokal Mashup (Blend 2 Tracks)
+              </button>
+              <button
+                type="button"
+                className={`studio-mode-tab-btn ${studioMode === 'generate' ? 'is-active' : ''}`}
+                onClick={() => setStudioMode('generate')}
+              >
+                🎵 Standart Şarkı Üret
+              </button>
+              <button
+                type="button"
+                className={`studio-mode-tab-btn ${studioMode === 'cover' ? 'is-active' : ''}`}
+                onClick={() => setStudioMode('cover')}
+              >
+                🎤 Cover &amp; Remix
+              </button>
+              <button
+                type="button"
+                className={`studio-mode-tab-btn ${studioMode === 'separate_vocals' ? 'is-active' : ''}`}
+                onClick={() => setStudioMode('separate_vocals')}
+              >
+                ✂️ Vokal Ayrıştır (Stem)
+              </button>
             </div>
 
-            {/* Right: Validation & JSON Preview */}
-            <div className="studio-panel-card studio-panel-card--highlight">
-              <h2 className="studio-panel-title">📤 Kie.ai Çıktı &amp; Doğrulama Durumu</h2>
+            <div className="studio-panel-grid">
+              {/* Left: Dynamic Parameter Inputs Based on Mode */}
+              <div className="studio-panel-card">
+                <h2 className="studio-panel-title">
+                  {studioMode === 'add_instrumental' && '🥁 Vokale Beat Ekleme Ayarları'}
+                  {studioMode === 'mashup' && '🎛️ Vokal Mashup Birleştirme Ayarları'}
+                  {studioMode === 'generate' && '🎵 Şarkı Üretim Parametreleri'}
+                  {studioMode === 'cover' && '🎤 Cover / Yeniden Yorumlama Ayarları'}
+                  {studioMode === 'separate_vocals' && '✂️ Vokal & Stem Ayrıştırma Ayarları'}
+                </h2>
 
-              {/* Validation Badge */}
-              <div className={`studio-validation-banner ${kieValidation.valid ? 'is-valid' : 'is-invalid'}`}>
-                {kieValidation.valid ? (
-                  <>
-                    <span className="icon">✅</span>
-                    <div>
-                      <strong>KIE.AI RESMİ SÖZLEŞMESİNE %100 UYGUN</strong>
-                      <p>Model sınırları, karakter limitleri ve ağırlık aralıkları doğrulandı.</p>
+                {/* 1. VOCAL STYLE PROFILE + AUDIO SOURCE */}
+                {studioMode !== 'separate_vocals' && (
+                  <div className="studio-form-group">
+                    <label>🎚️ Vokal Karakter / Stil Profili:</label>
+                    <select
+                      className="studio-select"
+                      value={selectedStyleProfileId}
+                      onChange={(e) => applyStyleProfile(e.target.value)}
+                    >
+                      <optgroup label="🎨 Sanatçıdan İlhamlı — Özgün Stil Profilleri">
+                        {TURKISH_RAP_ARTIST_PRESETS.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            🎤 {p.name} — {p.badge}
+                          </option>
+                        ))}
+                      </optgroup>
+                    </select>
+                    <p style={{ fontSize: '10px', color: '#94a3b8', marginTop: '5px' }}>
+                      Bu seçim belirli bir kişinin sesini klonlamaz; yalnızca tempo, flow, autotune, delivery ve
+                      aranjman karakterini prompt'a uygular. Lisanslı bir persona ID varsa ayrıca bağlanabilir.
+                    </p>
+                  </div>
+                )}
+
+                {(studioMode === 'add_instrumental' || studioMode === 'cover' || studioMode === 'separate_vocals') && (
+                  <div className="studio-form-group">
+                    <label>🎙️ Kendi / Yetkili Vokal Kaynağın:</label>
+                    <select
+                      className="studio-select"
+                      value={selectedVocalId}
+                      onChange={(e) => handleVocalSelect(e.target.value)}
+                    >
+                      <optgroup label="🎙️ Sistem / Yerel Vokal Kayıtları">
+                        {savedVocals.map((v) => (
+                          <option key={v.clip.id} value={v.clip.id}>
+                            🎤 {v.profile.handle} - {v.clip.label} ({Math.round(v.clip.durationMs / 1000)}s)
+                          </option>
+                        ))}
+                      </optgroup>
+                      <option value="custom">🔗 Kendi / Yetkili HTTPS Ses URL'm</option>
+                    </select>
+                    <div style={{ marginTop: '8px' }}>
+                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>
+                        Ses bağlantısı (upload_url / audio_url):
+                      </label>
+                      <input
+                        className="studio-input"
+                        value={vocalAudioUrl}
+                        onChange={(e) => {
+                          setVocalAudioUrl(e.target.value);
+                          setSelectedVocalId('custom');
+                        }}
+                        placeholder="https://...mp3 — yalnızca kullanım hakkın olan ses"
+                      />
                     </div>
-                  </>
-                ) : (
+                  </div>
+                )}
+
+                {/* 2. MASHUP DUAL AUDIO INPUTS */}
+                {studioMode === 'mashup' && (
                   <>
-                    <span className="icon">⚠️</span>
-                    <div>
-                      <strong>SÖZLEŞME HATASI (Kie Tarafından Reddedilir)</strong>
-                      <p>{kieValidation.error}</p>
+                    <div className="studio-form-group">
+                      <label>1. Ses / Vokal Parçası (Track 1 URL):</label>
+                      <input
+                        className="studio-input"
+                        value={mashupTrack1}
+                        onChange={(e) => setMashupTrack1(e.target.value)}
+                        placeholder="https://...vocal.mp3"
+                      />
+                    </div>
+                    <div className="studio-form-group">
+                      <label>2. Ses / Beat Parçası (Track 2 URL):</label>
+                      <input
+                        className="studio-input"
+                        value={mashupTrack2}
+                        onChange={(e) => setMashupTrack2(e.target.value)}
+                        placeholder="https://...beat.mp3"
+                      />
+                    </div>
+                    <div className="studio-form-group">
+                      <label>Vokal İşleme Modu (Vocal Mode):</label>
+                      <select
+                        className="studio-select"
+                        value={mashupVocalMode}
+                        onChange={(e) => setMashupVocalMode(e.target.value as VocalMode)}
+                      >
+                        <option value="auto_lyrics">🎙️ auto_lyrics (Otomatik Söz & Vokal Uyarlaması)</option>
+                        <option value="exact_lyrics">✍️ exact_lyrics (Birebir Sözler & Vokal Sadakati)</option>
+                        <option value="instrumental">🎹 instrumental (Enstrümantal Mashup - Sözsüz)</option>
+                      </select>
                     </div>
                   </>
                 )}
+
+                {/* 3. ADD INSTRUMENTAL BEAT SPECIFICS */}
+                {studioMode === 'add_instrumental' && (
+                  <>
+                    <div className="studio-form-group">
+                      <label>
+                        Beat Başlığı (Title): <span className="counter">({beatTitle.length}/100)</span>
+                      </label>
+                      <input className="studio-input" value={beatTitle} onChange={(e) => setBeatTitle(e.target.value)} />
+                    </div>
+
+                    <div className="studio-form-group">
+                      <label>
+                        Beat Tarzı &amp; Enstrümantal Etiketleri (Tags): <span className="counter">({beatTags.length}/1000)</span>
+                      </label>
+                      <textarea
+                        className="studio-textarea"
+                        rows={2}
+                        value={beatTags}
+                        onChange={(e) => setBeatTags(e.target.value)}
+                        placeholder="Örn: 142 BPM, UK Drill, sliding 808 sub, hard punchy kick, vocal pocket"
+                      />
+                      {/* One-click Beat Preset Chips */}
+                      <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginTop: '6px' }}>
+                        ⚡ Hızlı Beat Şablonları (Tek Tıkla Uygula):
+                      </label>
+                      <div className="studio-preset-chips">
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => {
+                            setBeatTags('Turkish Melodic Trap, 130 BPM, minor key emotional piano, sliding 808 sub bass, tight punchy kick, wide stereo, vocal pocket in mid frequencies');
+                            setKieStyle('Turkish Melodic Trap, 130 BPM, emotional piano, deep 808 bass, smooth autotune baritone vocals');
+                            setKieAudioWeight(0.85);
+                            setKieStyleWeight(0.72);
+                          }}
+                        >
+                          🎙️ Melodik Trap (130 BPM)
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => {
+                            setBeatTags('Turkish Hype Trap, 142 BPM, aggressive hard punchy kicks, bouncy sliding 808 bass, crisp stereo claps, club trap rhythm, high energy adlibs BABA YAAA');
+                            setKieStyle('Turkish Hype Trap, 142 BPM, hard autotune, bouncy sliding 808, high energy club trap');
+                            setKieAudioWeight(0.80);
+                            setKieStyleWeight(0.85);
+                          }}
+                        >
+                          ⚡ Hype Club Trap (142 BPM)
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => {
+                            setBeatTags('Turkish Street Drill, 140 BPM, gritty raw delivery, sliding sub 808 bass, dark atmospheric bell synths, hard drill snare, pain trap melancholic undertones');
+                            setKieStyle('Turkish Street Drill, 140 BPM, gritty raw delivery, dark sliding 808');
+                            setKieAudioWeight(0.85);
+                            setKieStyleWeight(0.80);
+                          }}
+                        >
+                          🔥 Sokak Drill (140 BPM)
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => {
+                            setBeatTags('Turkish Modern Drill, 140 BPM, bouncy hi-hat rolls, syncopated sliding 808, playful street cadence, whisper-to-hype adlibs, Istanbul drill groove');
+                            setKieStyle('Turkish Modern Drill, 140 BPM, playful street cadence, bouncy hi-hat rolls');
+                            setKieAudioWeight(0.82);
+                            setKieStyleWeight(0.80);
+                          }}
+                        >
+                          🏙️ Modern Istanbul Drill (140 BPM)
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => setBeatTags('142 BPM, UK Drill, sliding 808 sub, hard punchy kick, syncopated hi-hats, dark minor bells, carved vocal pocket')}
+                        >
+                          🇬🇧 UK Drill
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => setBeatTags('140 BPM, Dark Trap, heavy distorted 808, crisp rolls, punchy tight kick, wide stereo, radio master')}
+                        >
+                          🚀 Dark Trap
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => setBeatTags('85 BPM, Lo-Fi Hip-Hop, warm vinyl crackle, gentle rhodes chords, mellow kick, smooth sub bass, chill')}
+                        >
+                          ☕ Lo-Fi Chill
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => setBeatTags('105 BPM, Afrobeat, energetic log drum, syncopated percussion, warm chords, bouncy rhythmic groove')}
+                        >
+                          🌴 Afrobeat
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => setBeatTags('130 BPM, Drift Phonk, cowbell melody, heavy distorted 808 bass, dark Memphis style, aggressive flow')}
+                        >
+                          🏎️ Phonk
+                        </button>
+                        <button
+                          type="button"
+                          className="studio-preset-chip"
+                          onClick={() => setBeatTags('120 BPM, Modern Synth Pop, 80s drums, pumping analog bass, wide chorus, radio hit mix')}
+                        >
+                          ⚡ Synth Pop
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* 4. SEPARATE VOCALS SPECIFICS */}
+                {studioMode === 'separate_vocals' && (
+                  <div className="studio-form-group">
+                    <label>Ayrıştırma Türü (Separation Type):</label>
+                    <select
+                      className="studio-select"
+                      value={separationType}
+                      onChange={(e) => setSeparationType(e.target.value as KieSeparationType)}
+                    >
+                      <option value="separate_vocal">🎙️ separate_vocal (Vokal ve Müziği 2 Parçaya Ayır)</option>
+                      <option value="split_stem">🥁 split_stem (4 Stem: Vokal, Bas, Davul, Enstrümanlar)</option>
+                      <option value="split_stem_advanced">🎚️ split_stem_advanced (Gelişmiş Çok Kanallı Çözümleme)</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* 5. GENERATE & COVER SHARED FIELDS */}
+                {(studioMode === 'generate' || studioMode === 'cover') && (
+                  <>
+                    <div className="studio-checkbox-row">
+                      <label>
+                        <input type="checkbox" checked={kieCustomMode} onChange={(e) => setKieCustomMode(e.target.checked)} />
+                        <strong>Custom Mode</strong> (Özel Başlık, Stil &amp; Söz)
+                      </label>
+                      {studioMode === 'generate' && (
+                        <label>
+                          <input type="checkbox" checked={kieInstrumental} onChange={(e) => setKieInstrumental(e.target.checked)} />
+                          <strong>Instrumental</strong> (Vokalsiz Beat)
+                        </label>
+                      )}
+                    </div>
+
+                    <div className="studio-form-group">
+                      <label>
+                        Başlık (Title): <span className="counter">({kieTitle.length}/{kieModel === 'V4' ? 80 : 100})</span>
+                      </label>
+                      <input className="studio-input" value={kieTitle} onChange={(e) => setKieTitle(e.target.value)} />
+                    </div>
+
+                    <div className="studio-form-group">
+                      <label>
+                        Şarkı Sözü / Prompt: <span className="counter">({kiePrompt.length}/{kieModel === 'V4' ? 3000 : 5000})</span>
+                      </label>
+                      <textarea className="studio-textarea" rows={2} value={kiePrompt} onChange={(e) => setKiePrompt(e.target.value)} />
+                    </div>
+
+                    <div className="studio-form-group">
+                      <label>
+                        Stil (Style): <span className="counter">({kieStyle.length}/{kieModel === 'V4' ? 200 : 1000})</span>
+                      </label>
+                      <input className="studio-input" value={kieStyle} onChange={(e) => setKieStyle(e.target.value)} />
+                    </div>
+                  </>
+                )}
+
+                {/* 6. MODEL SELECTOR (for generate, add_instrumental, mashup, cover) */}
+                {studioMode !== 'separate_vocals' && (
+                  <div className="studio-form-group">
+                    <label>Kie Suno Modeli:</label>
+                    <select className="studio-select" value={kieModel} onChange={(e) => setKieModel(e.target.value as KieCoverModel)}>
+                      <option value="V6_WILD">V6_WILD (En İnsansı, Doğal Ses, Vokal Kilidi)</option>
+                      <option value="V6">V6 (Suno V6 Stabil)</option>
+                      <option value="V6_MINI">V6_MINI (Hızlı Nesil)</option>
+                      <option value="V5_5">V5_5 (Gelişmiş Ritim &amp; Süre Kontrolü)</option>
+                      <option value="V5">V5 (Klasik)</option>
+                      <option value="V4_5PLUS">V4_5PLUS</option>
+                      <option value="V4">V4 (Eski Versiyon - 80 Karakter Başlık Limiti)</option>
+                    </select>
+                  </div>
+                )}
+
+                {/* 7. VOCAL GENDER & NEGATIVE TAGS (except separation) */}
+                {studioMode !== 'separate_vocals' && (
+                  <>
+                    <div className="studio-form-group">
+                      <label>Negatif Etiketler (Negative Tags):</label>
+                      <input
+                        className="studio-input"
+                        value={kieNegativeTags}
+                        onChange={(e) => setKieNegativeTags(e.target.value)}
+                        placeholder="screaming, harsh noise, distorted..."
+                      />
+                    </div>
+
+                    <div className="studio-form-group">
+                      <label>Vokal Cinsiyeti (Vocal Gender):</label>
+                      <select
+                        className="studio-select"
+                        value={kieVocalGender}
+                        onChange={(e) => setKieVocalGender(e.target.value as 'm' | 'f' | 'any')}
+                      >
+                        <option value="any">Herhangi Biri / Fark Etmez</option>
+                        <option value="f">Kadın (Female)</option>
+                        <option value="m">Erkek (Male)</option>
+                      </select>
+                    </div>
+
+                    {/* Weight Sliders */}
+                    <div className="studio-slider-group">
+                      <div className="slider-header">
+                        <span>Audio Weight (Melodi &amp; Vokal Sadakati):</span>
+                        <strong>{kieAudioWeight.toFixed(2)}</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={kieAudioWeight}
+                        onChange={(e) => setKieAudioWeight(parseFloat(e.target.value))}
+                      />
+                    </div>
+
+                    <div className="studio-slider-group">
+                      <div className="slider-header">
+                        <span>Style Weight (Beat / Tarz Baskınlığı):</span>
+                        <strong>{kieStyleWeight.toFixed(2)}</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={kieStyleWeight}
+                        onChange={(e) => setKieStyleWeight(parseFloat(e.target.value))}
+                      />
+                    </div>
+
+                    <div className="studio-slider-group">
+                      <div className="slider-header">
+                        <span>Weirdness Constraint (Yaratıcı Sapma Sınırı):</span>
+                        <strong>{kieWeirdness.toFixed(2)}</strong>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={kieWeirdness}
+                        onChange={(e) => setKieWeirdness(parseFloat(e.target.value))}
+                      />
+                    </div>
+                  </>
+                )}
+
+                <div className="studio-form-group">
+                  <label>Callback Webhook URL (Opsiyonel):</label>
+                  <input className="studio-input" value={kieCallbackUrl} onChange={(e) => setKieCallbackUrl(e.target.value)} />
+                </div>
               </div>
 
-              <label className="studio-field-label" style={{ marginTop: '16px' }}>
-                Kie.ai'ye Gönderilecek Gerçek JSON Gövdesi (Payload Preview):
-              </label>
-              <pre className="studio-json-block">{JSON.stringify(outgoingKiePayload, null, 2)}</pre>
+              {/* Right: Outputs, Live Status, Preview & History */}
+              <div className="studio-panel-card studio-panel-card--highlight">
+                <h2 className="studio-panel-title">📤 Kie.ai Çıktı &amp; Doğrulama Durumu</h2>
+
+                {/* Validation Badge */}
+                <div className={`studio-validation-banner ${kieValidation.valid ? 'is-valid' : 'is-invalid'}`}>
+                  {kieValidation.valid ? (
+                    <>
+                      <span className="icon">✅</span>
+                      <div>
+                        <strong>KIE.AI ÖN DOĞRULAMA BAŞARILI</strong>
+                        <p>Model sınırları, karakter limitleri ve ağırlık aralıkları yerel olarak kontrol edildi.</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span className="icon">⚠️</span>
+                      <div>
+                        <strong>ÖN DOĞRULAMA HATASI</strong>
+                        <p>{kieValidation.error}</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <label className="studio-field-label" style={{ marginTop: '14px' }}>
+                  Kie.ai'ye Gönderilecek Gerçek JSON Gövdesi (Payload Preview):
+                </label>
+                <pre className="studio-json-block">{JSON.stringify(outgoingKiePayload, null, 2)}</pre>
+
+                {/* Secure server-side API configuration */}
+                <div className="studio-api-key-box">
+                  <div className="studio-mode-pill is-live">
+                    <span className="dot">🟢</span>
+                    <span>KIE.AI KİMLİK DOĞRULAMASI SUNUCU TARAFINDA</span>
+                  </div>
+                  <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '8px' }}>
+                    API anahtarı tarayıcıya gönderilmez ve localStorage içinde tutulmaz. <code>getSunoClient()</code>{' '}
+                    sunucu/runtime ortamındaki KIE credential'larını kullanmalıdır.
+                  </p>
+                </div>
+
+                {/* Send Action Button */}
+                <div className="studio-send-actions">
+                  <button
+                    type="button"
+                    className="studio-send-action-btn"
+                    disabled={!kieValidation.valid || isSubmitting}
+                    onClick={handleSendToKie}
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <span className="pulse-dot" style={{ background: '#fff' }} /> ⏳ Kie.ai'ye Gönderiliyor...
+                      </>
+                    ) : (
+                      <>🚀 Kie.ai'ye Gönder &amp; Üretimi Başlat</>
+                    )}
+                  </button>
+                </div>
+
+                {/* Live Polling Status */}
+                {pollStatus && (
+                  <div className="studio-poll-status">
+                    <span className="pulse-dot" />
+                    <span>{pollStatus}</span>
+                  </div>
+                )}
+
+                {/* Success Result & Audio Variations Player */}
+                {sendTask && (sendTask.audioList?.length || sendTask.audioUrl) && (
+                  <div className="studio-result-panel">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <strong style={{ color: '#10b981', fontSize: '14px' }}>
+                        🎉 Kie.ai Üretim Sonucu ({sendTask.audioList?.length || 1} Varyasyon)
+                      </strong>
+                      <span className="studio-mode-pill is-live" style={{ fontSize: '10px' }}>
+                        {sendTask.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                      Task ID: <code>{sendTask.taskId}</code> • <em>Kitaplığa otomatik kaydedildi!</em>
+                    </div>
+
+                    {/* Render each audio variation returned by Kie */}
+                    {(sendTask.audioList && sendTask.audioList.length > 0
+                      ? sendTask.audioList
+                      : [{ audioUrl: sendTask.audioUrl, title: sendTask.title }]
+                    ).map((track, idx) => (
+                      <div key={idx} className="studio-track-card">
+                        <div className="studio-track-header">
+                          {track.imageUrl ? (
+                            <img className="studio-track-img" src={track.imageUrl} alt="" />
+                          ) : (
+                            <div className="studio-track-img" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
+                              🎵
+                            </div>
+                          )}
+                          <div className="studio-track-meta">
+                            <strong>{track.title || `${kieTitle} (Varyasyon ${idx + 1})`}</strong>
+                            <span>{track.duration ? `${Math.round(track.duration)} sn` : 'Tam Süre'}</span>
+                          </div>
+                        </div>
+                        {track.audioUrl && (
+                          <audio className="studio-audio-player" controls autoPlay={idx === 0} src={track.audioUrl} />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Error Panel */}
+                {sendError && (
+                  <div className="studio-error-panel">
+                    <strong style={{ display: 'block', marginBottom: '4px' }}>⚠️ Kie.ai Hatası:</strong>
+                    <span>{sendError}</span>
+                  </div>
+                )}
+
+                {/* Archive / History of Generated Kie Tracks */}
+                {generatedHistory.length > 0 && (
+                  <div className="studio-history-section">
+                    <div className="studio-history-title">
+                      <span>📚 Kie.ai ile Üretilen Şarkılar Arşivi ({generatedHistory.length})</span>
+                    </div>
+                    <div className="studio-history-grid">
+                      {generatedHistory.slice(-8).reverse().map((song) => (
+                        <div key={song.id} className="studio-history-item">
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <strong style={{ fontSize: '12px', color: '#fff' }}>{song.title}</strong>
+                            <span style={{ fontSize: '10px', color: '#94a3b8' }}>
+                              {new Date(song.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          {song.styleText && (
+                            <div style={{ fontSize: '11px', color: '#cbd5e1', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {song.styleText}
+                            </div>
+                          )}
+                          {song.audioUrl && (
+                            <audio className="studio-audio-player" controls src={song.audioUrl} />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

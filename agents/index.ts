@@ -2,7 +2,7 @@ export { createLogger, getLogBuffer, clearLogBuffer, logsFor } from './shared/lo
 export { measure, assertBudget } from './shared/perf';
 export { AgentError } from './shared/errors';
 export { createId } from './shared/ids';
-export { resetAllLocal } from './shared/persist';
+export { resetAllLocal, readAllLocal, upsertLocal } from './shared/persist';
 
 export { getSunoClient, shouldUseMockSuno } from './suno/client';
 
@@ -38,6 +38,8 @@ export type {
   KieCoverModel,
   KieSeparationType,
   KieSeparateVocalsRequest,
+  SunoTask,
+  SunoTaskAudio,
 } from './suno/types';
 
 export {
@@ -65,7 +67,7 @@ export type { CreateInput, GenerationRecord } from './create/agent';
 export { checkLyrics } from './create/lyrics';
 export { listStyles, seedStyles, SEED_STYLES } from './create/styles';
 export { handleKieWebhook } from './suno/webhook';
-export { validateKieGenerateRequest, validateKieMashupRequest } from './suno/validation';
+export { validateKieGenerateRequest, validateKieMashupRequest, validateWeightRange } from './suno/validation';
 export { withProviderRetry } from './suno/retry';
 export { isSafeExternalUrl, assertSafeExternalUrl } from './security/ssrf';
 export { validateAudioUpload, sanitizeAudioFilename, assertClipOwnership } from './security/audio';

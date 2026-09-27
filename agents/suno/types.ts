@@ -2,9 +2,9 @@ import type { SunoModel, VocalMode } from '../shared/types';
 
 export type SunoGenerateRequest = {
   customMode: boolean;
-  instrumental: boolean;
+  instrumental?: boolean;
   model: SunoModel | KieCoverModel;
-  prompt: string;
+  prompt?: string;
   lyrics?: string;
   style?: string;
   title?: string;
@@ -89,6 +89,7 @@ export type KieAddInstrumentalRequest = {
   styleWeight?: number;
   weirdnessConstraint?: number;
   audioWeight?: number;
+  personaId?: string;
   callBackUrl?: string;
 };
 
@@ -124,12 +125,26 @@ export type KieTimestampedLyricsData = {
   isStreamed?: boolean;
 };
 
+export type SunoTaskAudio = {
+  id?: string;
+  title?: string;
+  audioUrl?: string;
+  audio_url?: string;
+  streamAudioUrl?: string;
+  stream_audio_url?: string;
+  imageUrl?: string;
+  image_url?: string;
+  duration?: number;
+  tags?: string;
+};
+
 export type SunoTask = {
   taskId: string;
   status: 'queued' | 'running' | 'ready' | 'failed';
   audioUrl?: string;
   title?: string;
   error?: string;
+  audioList?: SunoTaskAudio[];
 };
 
 export type SunoClientPort = {
